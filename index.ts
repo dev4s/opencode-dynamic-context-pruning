@@ -89,8 +89,7 @@ const plugin: Plugin = (async (ctx) => {
         }
     }
 
-    // Global fetch wrapper that caches tool parameters for janitor metadata
-    // Note: Pruning is handled per-session in the chat.params hook, not here
+    // Global fetch wrapper that both caches tool parameters AND performs pruning
     // This works because all providers ultimately call globalThis.fetch
     const originalGlobalFetch = globalThis.fetch
     globalThis.fetch = async (input: any, init?: any) => {
@@ -98,16 +97,64 @@ const plugin: Plugin = (async (ctx) => {
             try {
                 const body = JSON.parse(init.body)
                 if (body.messages && Array.isArray(body.messages)) {
+                    logger.info("global-fetch", "🔥 AI REQUEST INTERCEPTED via global fetch!", {
+                        url: typeof input === 'string' ? input.substring(0, 80) : 'URL object',
+                        messageCount: body.messages.length
+                    })
+
                     // Cache tool parameters for janitor metadata
                     cacheToolParameters(body.messages, "global-fetch")
                     
-                    // Log tool messages for debugging
+                    // Check for tool messages that might need pruning
                     const toolMessages = body.messages.filter((m: any) => m.role === 'tool')
                     if (toolMessages.length > 0) {
                         logger.debug("global-fetch", "Found tool messages in request", {
                             toolMessageCount: toolMessages.length,
                             toolCallIds: toolMessages.map((m: any) => m.tool_call_id).slice(0, 5)
                         })
+
+                        // Collect all pruned IDs across all sessions (excluding subagents)
+                        // This is safe because tool_call_ids are globally unique
+                        const allSessions = await ctx.client.session.list()
+                        const allPrunedIds = new Set<string>()
+
+                        if (allSessions.data) {
+                            for (const session of allSessions.data) {
+                                // Skip subagent sessions (don't log - it's normal and would spam logs)
+                                if (session.parentID) {
+                                    continue
+                                }
+                                
+                                const prunedIds = await stateManager.get(session.id)
+                                prunedIds.forEach(id => allPrunedIds.add(id))
+                            }
+                        }
+
+                        if (allPrunedIds.size > 0) {
+                            let replacedCount = 0
+                            body.messages = body.messages.map((m: any) => {
+                                // Normalize ID to lowercase for case-insensitive matching
+                                if (m.role === 'tool' && allPrunedIds.has(m.tool_call_id?.toLowerCase())) {
+                                    replacedCount++
+                                    return {
+                                        ...m,
+                                        content: '[Output removed to save context - information superseded or no longer needed]'
+                                    }
+                                }
+                                return m
+                            })
+
+                            if (replacedCount > 0) {
+                                logger.info("global-fetch", "✂️ Replaced pruned tool messages", {
+                                    totalPrunedIds: allPrunedIds.size,
+                                    replacedCount: replacedCount,
+                                    totalMessages: body.messages.length
+                                })
+
+                                // Update the request body with modified messages
+                                init.body = JSON.stringify(body)
+                            }
+                        }
                     }
                 }
             } catch (e) {
@@ -210,12 +257,12 @@ const plugin: Plugin = (async (ctx) => {
 
             logger.debug("chat.params", "Wrapping fetch for session", {
                 sessionID: sessionId,
-                hasFetch: !!output.options["fetch"],
-                fetchType: output.options["fetch"] ? typeof output.options["fetch"] : "none"
+                hasFetch: !!(output.options as any).fetch,
+                fetchType: (output.options as any).fetch ? typeof (output.options as any).fetch : "none"
             })
 
             // Get the existing fetch - this might be from auth provider or globalThis
-            const existingFetch = output.options["fetch"] ?? globalThis.fetch
+            const existingFetch = (output.options as any).fetch ?? globalThis.fetch
 
             logger.debug("chat.params", "Existing fetch captured", {
                 sessionID: sessionId,
@@ -223,7 +270,7 @@ const plugin: Plugin = (async (ctx) => {
             })
 
             // Wrap the existing fetch with our pruning logic
-            output.options["fetch"] = async (fetchInput: any, init?: any) => {
+            ;(output.options as any).fetch = async (fetchInput: any, init?: any) => {
                 logger.info("pruning-fetch", "🔥 FETCH WRAPPER CALLED!", {
                     sessionId,
                     url: typeof fetchInput === 'string' ? fetchInput.substring(0, 100) : 'URL object'
