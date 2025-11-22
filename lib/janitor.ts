@@ -318,6 +318,16 @@ export class Janitor {
 
                     this.logger.debug("janitor", "Starting shadow inference", { sessionID })
 
+                    // Replace already-pruned tool outputs to save tokens in janitor context
+                    const allPrunedSoFar = [...alreadyPrunedIds, ...deduplicatedIds]
+                    const sanitizedMessages = this.replacePrunedToolOutputs(messages, allPrunedSoFar)
+                    
+                    this.logger.debug("janitor", "Sanitized messages for analysis", {
+                        sessionID,
+                        totalPrunedBeforeAnalysis: allPrunedSoFar.length,
+                        prunedIds: allPrunedSoFar.slice(0, 5) // Show first 5
+                    })
+
                     // Analyze which tool calls are obsolete
                     const result = await generateObject({
                         model: modelSelection.model,
@@ -325,7 +335,7 @@ export class Janitor {
                             pruned_tool_call_ids: z.array(z.string()),
                             reasoning: z.string(),
                         }),
-                        prompt: buildAnalysisPrompt(prunableToolCallIds, messages, this.protectedTools)
+                        prompt: buildAnalysisPrompt(prunableToolCallIds, sanitizedMessages, this.protectedTools)
                     })
 
                     // Filter LLM results to only include IDs that were actually candidates
@@ -425,7 +435,6 @@ export class Janitor {
                     sessionID,
                     deduplicatedIds,
                     deduplicationDetails,
-                    toolMetadata,
                     toolOutputs
                 )
             } else {
@@ -479,6 +488,41 @@ export class Janitor {
         }
 
         return path
+    }
+
+    /**
+     * Replace pruned tool outputs with placeholder text to save tokens in janitor context
+     * This applies the same replacement logic as the global fetch wrapper, but for the
+     * janitor's shadow inference to avoid sending already-pruned content to the LLM
+     */
+    private replacePrunedToolOutputs(messages: any[], prunedIds: string[]): any[] {
+        if (prunedIds.length === 0) return messages
+
+        const prunedIdsSet = new Set(prunedIds.map(id => id.toLowerCase()))
+        
+        return messages.map(msg => {
+            if (!msg.parts) return msg
+            
+            return {
+                ...msg,
+                parts: msg.parts.map((part: any) => {
+                    if (part.type === 'tool' && 
+                        part.callID && 
+                        prunedIdsSet.has(part.callID.toLowerCase()) &&
+                        part.state?.output) {
+                        // Replace with the same placeholder used by the global fetch wrapper
+                        return {
+                            ...part,
+                            state: {
+                                ...part.state,
+                                output: '[Output removed to save context - information superseded or no longer needed]'
+                            }
+                        }
+                    }
+                    return part
+                })
+            }
+        })
     }
 
     /**
@@ -544,7 +588,6 @@ export class Janitor {
         sessionID: string,
         deduplicatedIds: string[],
         deduplicationDetails: Map<string, any>,
-        toolMetadata: Map<string, any>,
         toolOutputs: Map<string, string>
     ) {
         if (deduplicatedIds.length === 0) return

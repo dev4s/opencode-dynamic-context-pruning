@@ -105,33 +105,41 @@ const plugin: Plugin = (async (ctx) => {
                     // Cache tool parameters for janitor metadata
                     cacheToolParameters(body.messages, "global-fetch")
                     
+                    // Always save wrapped context if debug is enabled (even when no tool messages)
+                    // This captures janitor's AI inference which has messageCount=1 (just prompt)
+                    const shouldLogAllRequests = logger.enabled
+                    
                     // Check for tool messages that might need pruning
                     const toolMessages = body.messages.filter((m: any) => m.role === 'tool')
+                    
+                    // Collect all pruned IDs across all sessions (excluding subagents)
+                    // This is safe because tool_call_ids are globally unique
+                    const allSessions = await ctx.client.session.list()
+                    const allPrunedIds = new Set<string>()
+
+                    if (allSessions.data) {
+                        for (const session of allSessions.data) {
+                            // Skip subagent sessions (don't log - it's normal and would spam logs)
+                            if (session.parentID) {
+                                continue
+                            }
+                            
+                            const prunedIds = await stateManager.get(session.id)
+                            prunedIds.forEach(id => allPrunedIds.add(id))
+                        }
+                    }
+
+                    // Only process tool message replacement if there are tool messages
                     if (toolMessages.length > 0) {
                         logger.debug("global-fetch", "Found tool messages in request", {
                             toolMessageCount: toolMessages.length,
                             toolCallIds: toolMessages.map((m: any) => m.tool_call_id).slice(0, 5)
                         })
-
-                        // Collect all pruned IDs across all sessions (excluding subagents)
-                        // This is safe because tool_call_ids are globally unique
-                        const allSessions = await ctx.client.session.list()
-                        const allPrunedIds = new Set<string>()
-
-                        if (allSessions.data) {
-                            for (const session of allSessions.data) {
-                                // Skip subagent sessions (don't log - it's normal and would spam logs)
-                                if (session.parentID) {
-                                    continue
-                                }
-                                
-                                const prunedIds = await stateManager.get(session.id)
-                                prunedIds.forEach(id => allPrunedIds.add(id))
-                            }
-                        }
-
+                        
                         if (allPrunedIds.size > 0) {
                             let replacedCount = 0
+                            const originalMessages = JSON.parse(JSON.stringify(body.messages)) // Deep copy for logging
+                            
                             body.messages = body.messages.map((m: any) => {
                                 // Normalize ID to lowercase for case-insensitive matching
                                 if (m.role === 'tool' && allPrunedIds.has(m.tool_call_id?.toLowerCase())) {
@@ -151,10 +159,75 @@ const plugin: Plugin = (async (ctx) => {
                                     totalMessages: body.messages.length
                                 })
 
+                                // Save wrapped context to file if debug is enabled
+                                await logger.saveWrappedContext(
+                                    "global", // Use "global" as session ID since we don't know which session this is
+                                    body.messages,
+                                    {
+                                        url: typeof input === 'string' ? input : 'URL object',
+                                        totalPrunedIds: allPrunedIds.size,
+                                        replacedCount,
+                                        totalMessages: body.messages.length,
+                                        originalMessageCount: originalMessages.length
+                                    }
+                                )
+
                                 // Update the request body with modified messages
                                 init.body = JSON.stringify(body)
+                            } else if (shouldLogAllRequests) {
+                                // Log even when no replacements occurred (tool messages exist but none were pruned)
+                                await logger.saveWrappedContext(
+                                    "global",
+                                    body.messages,
+                                    {
+                                        url: typeof input === 'string' ? input : 'URL object',
+                                        totalPrunedIds: allPrunedIds.size,
+                                        replacedCount: 0,
+                                        totalMessages: body.messages.length,
+                                        toolMessageCount: toolMessages.length,
+                                        note: "Tool messages exist but none were replaced"
+                                    }
+                                )
                             }
+                        } else if (shouldLogAllRequests) {
+                            // Log when tool messages exist but no pruned IDs exist yet
+                            await logger.saveWrappedContext(
+                                "global",
+                                body.messages,
+                                {
+                                    url: typeof input === 'string' ? input : 'URL object',
+                                    totalPrunedIds: 0,
+                                    replacedCount: 0,
+                                    totalMessages: body.messages.length,
+                                    toolMessageCount: toolMessages.length,
+                                    note: "No pruned IDs exist yet"
+                                }
+                            )
                         }
+                    } else if (shouldLogAllRequests) {
+                        // Log requests with NO tool messages (e.g., janitor's shadow inference)
+                        // Detect if this is a janitor request by checking the prompt content
+                        const isJanitorRequest = body.messages.length === 1 && 
+                            body.messages[0]?.role === 'user' &&
+                            typeof body.messages[0]?.content === 'string' &&
+                            body.messages[0].content.includes('conversation analyzer that identifies obsolete tool outputs')
+                        
+                        const sessionId = isJanitorRequest ? "janitor-shadow" : "global"
+                        
+                        await logger.saveWrappedContext(
+                            sessionId,
+                            body.messages,
+                            {
+                                url: typeof input === 'string' ? input : 'URL object',
+                                totalPrunedIds: allPrunedIds.size,
+                                replacedCount: 0,
+                                totalMessages: body.messages.length,
+                                toolMessageCount: 0,
+                                note: isJanitorRequest 
+                                    ? "Janitor shadow inference with embedded session history in prompt"
+                                    : "No tool messages in request (likely title generation or other inference)"
+                            }
+                        )
                     }
                 }
             } catch (e) {
@@ -362,6 +435,19 @@ const plugin: Plugin = (async (ctx) => {
                                 totalToolCount: remainingToolMessages.length,
                                 toolCallIds: remainingToolMessages.map((m: any) => m.tool_call_id)
                             })
+
+                            // Save wrapped context to file if debug is enabled
+                            await logger.saveWrappedContext(
+                                sessionId,
+                                body.messages,
+                                {
+                                    url: typeof fetchInput === 'string' ? fetchInput : 'URL object',
+                                    totalMessages: originalMessageCount,
+                                    replacedCount: prunedThisRequest,
+                                    prunedIds,
+                                    wrapper: 'session-specific'
+                                }
+                            )
 
                             // Update the request body with modified messages
                             init.body = JSON.stringify(body)
