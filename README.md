@@ -6,7 +6,23 @@ Automatically reduces token usage in OpenCode by removing obsolete tool outputs 
 
 ## What It Does
 
-When your OpenCode session becomes idle, this plugin analyzes your conversation and identifies tool outputs that are no longer relevant (superseded file reads, old errors that were fixed, exploratory searches, etc.). These obsolete outputs are pruned from future requests to save tokens and reduce costs.
+This plugin automatically optimizes token usage by identifying and removing redundant or obsolete tool outputs from your conversation history. It operates in two modes:
+
+### Pruning Modes
+
+**Auto Mode** (`"auto"`): Fast, deterministic duplicate removal
+- Removes duplicate tool calls (same tool + identical parameters)
+- Keeps only the most recent occurrence of each duplicate
+- Zero LLM inference costs
+- Instant, predictable results
+
+**Smart Mode** (`"smart"`): Comprehensive intelligent pruning (recommended)
+- Phase 1: Automatic duplicate removal (same as auto mode)
+- Phase 2: AI analysis to identify obsolete outputs (superseded information, dead-end exploration, etc.)
+- Maximum token savings
+- Small LLM cost for analysis (reduced by deduplication first)
+
+When your session becomes idle, the plugin analyzes your conversation and prunes tool outputs that are no longer relevant, saving tokens and reducing costs.
 
 ## Installation
 
@@ -27,84 +43,92 @@ Restart OpenCode. The plugin will automatically start optimizing your sessions.
 
 ## Configuration
 
-The plugin supports both global and project-level configuration:
+### Available Options
 
-- **Global:** `~/.config/opencode/dcp.jsonc` - Applies to all OpenCode sessions
-- **Project:** `.opencode/dcp.jsonc` - Applies only to the current project
+- **`enabled`** (boolean, default: `true`) - Enable/disable the plugin
+- **`debug`** (boolean, default: `false`) - Enable detailed logging to `~/.config/opencode/logs/dcp/YYYY-MM-DD.log`
+- **`model`** (string, optional) - Specific model for analysis (e.g., `"anthropic/claude-haiku-4-5"`). Uses session model or smart fallbacks when not specified.
+- **`showModelErrorToasts`** (boolean, default: `true`) - Show notifications when model selection falls back
+- **`pruningMode`** (string, default: `"smart"`) - Pruning strategy:
+  - `"auto"`: Fast duplicate removal only (zero LLM cost)
+  - `"smart"`: Deduplication + AI analysis (recommended, maximum savings)
+- **`protectedTools`** (string[], default: `["task", "todowrite", "todoread"]`) - Tools that should never be pruned
 
-Project configuration takes precedence over global configuration. The plugin creates a default global configuration file on first run.
+Example configuration:
 
 ```jsonc
 {
-  // Enable or disable the Dynamic Context Pruning plugin
   "enabled": true,
-
-  // Enable debug logging to ~/.config/opencode/logs/dcp/YYYY-MM-DD.log
   "debug": false,
-
-  // Optional: Use a specific model for analysis (otherwise uses session model or smart fallbacks)
-  // "model": "anthropic/claude-haiku-4-5",
-
-  // Show toast notifications when model selection fails and falls back
-  "showModelErrorToasts": true,
-
-  // List of tools that should never be pruned from context
-  // The 'task' tool is protected by default to preserve subagent coordination
-  "protectedTools": ["task"]
+  "pruningMode": "smart",
+  "protectedTools": ["task", "todowrite", "todoread"]
 }
 ```
 
 ### Configuration Hierarchy
 
-1. **Defaults** - Built-in plugin defaults
-2. **Global config** (`~/.config/opencode/dcp.jsonc`) - Overrides defaults
-3. **Project config** (`.opencode/dcp.jsonc`) - Overrides global config
+1. **Built-in defaults** → 2. **Global config** (`~/.config/opencode/dcp.jsonc`) → 3. **Project config** (`.opencode/dcp.jsonc`)
 
-This allows you to:
-- Set global defaults for all projects
-- Override settings per-project (e.g., disable for sensitive projects, use different models)
-- Commit project config to version control for team consistency
-
-### Creating Project-Level Config
-
-To create a project-specific configuration:
-
-1. Create `.opencode` directory in your project root (if it doesn't exist)
-2. Create `dcp.jsonc` file inside `.opencode/`
-3. Add your project-specific settings
+The global config is automatically created on first run. Create project configs manually to override settings per-project:
 
 ```bash
-# In your project directory
 mkdir -p .opencode
 cat > .opencode/dcp.jsonc << 'EOF'
 {
-  // Project-specific DCP settings
   "debug": true,
-  "protectedTools": ["task", "read"]
+  "pruningMode": "auto"
 }
 EOF
 ```
 
-The global config (`~/.config/opencode/dcp.jsonc`) is automatically created on first run. Project configs are opt-in and must be created manually.
+After modifying configuration, restart OpenCode for changes to take effect.
 
-### Configuration Options
+### Choosing a Pruning Mode
 
-- **`enabled`** (boolean, default: `true`)  
-  Enable or disable the plugin without removing it from your OpenCode configuration.
+**Use Auto Mode (`"auto"`) when:**
+- Minimizing costs is critical (zero LLM inference for pruning)
+- You have many repetitive tool calls (file re-reads, repeated commands)
+- You want predictable, deterministic behavior
+- You're debugging or testing and need consistent results
 
-- **`debug`** (boolean, default: `false`)  
-  Enable detailed debug logging. Logs are written to `~/.config/opencode/logs/dcp/YYYY-MM-DD.log`.
+**Use Smart Mode (`"smart"`) when:**
+- You want maximum token savings (recommended for most users)
+- Your workflow has both duplicates and obsolete exploration
+- You're willing to incur small LLM costs for comprehensive pruning
+- You want the plugin to intelligently identify superseded information
 
-- **`model`** (string, optional)  
-  Optional: Specify a model to use for analysis in "provider/model" format (e.g., `"anthropic/claude-haiku-4-5"`). When not specified, the plugin uses the current session model or falls back to authenticated providers in priority order.
+**Example notification formats:**
 
-- **`showModelErrorToasts`** (boolean, default: `true`)  
-  Show toast notifications when model selection fails and falls back to another model. Set to `false` to disable these informational toasts.
+Auto mode:
+```
+🧹 DCP: Saved ~1.2K tokens (5 duplicate tools removed)
 
-- **`protectedTools`** (string[], default: `["task"]`)  
-  List of tool names that should never be pruned from context. The `task` tool is protected by default to ensure subagent coordination works correctly.
+read (3 duplicates):
+  ~/project/src/index.ts (2× duplicate)
+  ~/project/lib/utils.ts (1× duplicate)
 
-After modifying the configuration, restart OpenCode for changes to take effect.
+bash (2 duplicates):
+  Run tests (2× duplicate)
+```
+
+Smart mode:
+```
+🧹 DCP: Saved ~3.4K tokens (8 tools pruned)
+
+📦 Duplicates removed (5):
+  read:
+    ~/project/src/index.ts (3×)
+    ~/project/lib/utils.ts (2×)
+  bash:
+    Run tests (2×)
+
+🤖 LLM analysis (3):
+  grep (2):
+    pattern: "old.*function"
+    pattern: "deprecated"
+  list (1):
+    ~/project/temp
+```
 
 To check the latest available version:
 

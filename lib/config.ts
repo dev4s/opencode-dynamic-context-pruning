@@ -12,13 +12,15 @@ export interface PluginConfig {
     protectedTools: string[]
     model?: string // Format: "provider/model" (e.g., "anthropic/claude-haiku-4-5")
     showModelErrorToasts?: boolean // Show toast notifications when model selection fails
+    pruningMode: "auto" | "smart" // Pruning strategy: auto (deduplication only) or smart (deduplication + LLM analysis)
 }
 
 const defaultConfig: PluginConfig = {
     enabled: true, // Plugin is enabled by default
     debug: false, // Disable debug logging by default
-    protectedTools: ['task'], // Tools that should never be pruned
-    showModelErrorToasts: true // Show model error toasts by default
+    protectedTools: ['task', 'todowrite', 'todoread'], // Tools that should never be pruned (including stateful tools)
+    showModelErrorToasts: true, // Show model error toasts by default
+    pruningMode: 'smart' // Default to smart mode (deduplication + LLM analysis)
 }
 
 const GLOBAL_CONFIG_DIR = join(homedir(), '.config', 'opencode')
@@ -99,9 +101,15 @@ function createDefaultConfig(): void {
   // Set to false to disable these informational toasts
   "showModelErrorToasts": true,
 
+  // Pruning strategy:
+  // "auto": Automatic duplicate removal only (fast, no LLM cost)
+  // "smart": Deduplication + AI analysis for intelligent pruning (recommended)
+  "pruningMode": "smart",
+
   // List of tools that should never be pruned from context
-  // The 'task' tool is protected by default to preserve subagent coordination
-  "protectedTools": ["task"]
+  // "task": Each subagent invocation is intentional
+  // "todowrite"/"todoread": Stateful tools where each call matters
+  "protectedTools": ["task", "todowrite", "todoread"]
 }
 `
 
@@ -149,7 +157,8 @@ export function getConfig(ctx?: PluginInput): PluginConfig {
                 debug: globalConfig.debug ?? config.debug,
                 protectedTools: globalConfig.protectedTools ?? config.protectedTools,
                 model: globalConfig.model ?? config.model,
-                showModelErrorToasts: globalConfig.showModelErrorToasts ?? config.showModelErrorToasts
+                showModelErrorToasts: globalConfig.showModelErrorToasts ?? config.showModelErrorToasts,
+                pruningMode: globalConfig.pruningMode ?? config.pruningMode
             }
             logger.info('config', 'Loaded global config', { path: configPaths.global })
         }
@@ -168,7 +177,8 @@ export function getConfig(ctx?: PluginInput): PluginConfig {
                 debug: projectConfig.debug ?? config.debug,
                 protectedTools: projectConfig.protectedTools ?? config.protectedTools,
                 model: projectConfig.model ?? config.model,
-                showModelErrorToasts: projectConfig.showModelErrorToasts ?? config.showModelErrorToasts
+                showModelErrorToasts: projectConfig.showModelErrorToasts ?? config.showModelErrorToasts,
+                pruningMode: projectConfig.pruningMode ?? config.pruningMode
             }
             logger.info('config', 'Loaded project config (overrides global)', { path: configPaths.project })
         }

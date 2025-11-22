@@ -22,7 +22,9 @@ ${protectedToolsText}- Recent tool calls
 - Tool calls where the user explicitly indicated they want to retain the information (e.g., "save this", "remember this", "keep this for later", "don't output anything else but save this")
 - Tool calls that are the MOST RECENT activity in the conversation (these may be intended for future use)
 
-Available tool call IDs in this session (not yet pruned): ${unprunedToolCallIds.join(", ")}
+IMPORTANT: Available tool call IDs for analysis (duplicates already removed): ${unprunedToolCallIds.join(", ")}
+
+You may see additional tool call IDs in the session history below, but those have already been handled by automatic deduplication. ONLY return IDs from the available list above.
 
 Session history:
 ${JSON.stringify(messages, null, 2)}
@@ -33,5 +35,5 @@ You MUST respond with valid JSON matching this exact schema:
   "reasoning": "explanation of why these IDs were selected"
 }
 
-Return ONLY the tool call IDs that should be pruned (removed from future LLM requests).`
+Return ONLY the tool call IDs from the available list above that should be pruned.`
 }
