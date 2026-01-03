@@ -1,7 +1,7 @@
 import { SessionState, WithParts } from "../state"
 import { UserMessage } from "@opencode-ai/sdk"
 import { Logger } from "../logger"
-import { encode } from "gpt-tokenizer"
+import { encodeText } from "../tokenizer"
 import { getLastUserMessage, isMessageCompacted } from "../shared-utils"
 
 export function getCurrentParams(
@@ -25,11 +25,11 @@ export function getCurrentParams(
 }
 
 /**
- * Estimates token counts for a batch of texts using gpt-tokenizer.
+ * Estimates token counts for a batch of texts using the lazy tokenizer.
  */
 function estimateTokensBatch(texts: string[]): number[] {
     try {
-        return texts.map((text) => encode(text).length)
+        return texts.map((text) => encodeText(text).length)
     } catch {
         return texts.map((text) => Math.round(text.length / 4))
     }

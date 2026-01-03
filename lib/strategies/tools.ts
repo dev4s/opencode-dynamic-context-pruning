@@ -10,8 +10,23 @@ import type { Logger } from "../logger"
 import { loadPrompt } from "../prompt"
 import { calculateTokensSaved, getCurrentParams } from "./utils"
 
-const DISCARD_TOOL_DESCRIPTION = loadPrompt("discard-tool-spec")
-const EXTRACT_TOOL_DESCRIPTION = loadPrompt("extract-tool-spec")
+// Lazy-loaded tool descriptions (deferred to first tool creation)
+let discardToolDescription: string | null = null
+let extractToolDescription: string | null = null
+
+function getDiscardToolDescription(): string {
+    if (!discardToolDescription) {
+        discardToolDescription = loadPrompt("discard-tool-spec")
+    }
+    return discardToolDescription
+}
+
+function getExtractToolDescription(): string {
+    if (!extractToolDescription) {
+        extractToolDescription = loadPrompt("extract-tool-spec")
+    }
+    return extractToolDescription
+}
 
 export interface PruneToolContext {
     client: any
@@ -132,7 +147,7 @@ async function executePruneOperation(
 
 export function createDiscardTool(ctx: PruneToolContext): ReturnType<typeof tool> {
     return tool({
-        description: DISCARD_TOOL_DESCRIPTION,
+        description: getDiscardToolDescription(),
         args: {
             ids: tool.schema
                 .array(tool.schema.string())
@@ -158,7 +173,7 @@ export function createDiscardTool(ctx: PruneToolContext): ReturnType<typeof tool
 
 export function createExtractTool(ctx: PruneToolContext): ReturnType<typeof tool> {
     return tool({
-        description: EXTRACT_TOOL_DESCRIPTION,
+        description: getExtractToolDescription(),
         args: {
             ids: tool.schema
                 .array(tool.schema.string())

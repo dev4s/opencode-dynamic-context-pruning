@@ -5,6 +5,7 @@ import { loadPrompt } from "./lib/prompt"
 import { createSessionState } from "./lib/state"
 import { createDiscardTool, createExtractTool } from "./lib/strategies"
 import { createChatMessageTransformHandler, createEventHandler } from "./lib/hooks"
+import { preloadTokenizer } from "./lib/tokenizer"
 
 const plugin: Plugin = (async (ctx) => {
     const config = getConfig(ctx)
@@ -12,6 +13,9 @@ const plugin: Plugin = (async (ctx) => {
     if (!config.enabled) {
         return {}
     }
+
+    // Start loading tokenizer in background (non-blocking)
+    preloadTokenizer()
 
     // Suppress AI SDK warnings
     if (typeof globalThis !== "undefined") {
