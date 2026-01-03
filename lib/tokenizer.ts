@@ -1,50 +1,22 @@
 /**
- * Lazy tokenizer module - loads gpt-tokenizer in background to avoid blocking startup.
+ * Token estimation module - uses character-based heuristics for fast token counting.
  *
- * The gpt-tokenizer package takes 5-15 seconds to initialize due to loading
- * large vocabulary files. This module defers that load to happen asynchronously
- * after plugin initialization, keeping startup instant.
+ * This module provides approximate token counts (~85-95% accuracy) using a simple
+ * character-to-token ratio. This is sufficient for statistics display where counts
+ * are shown with a "~" prefix indicating approximation.
+ *
+ * Using estimation instead of actual tokenization eliminates the 5-15 second
+ * startup delay that tokenizer libraries like gpt-tokenizer require.
  */
 
-type EncodeFn = (text: string) => number[]
-
-let encodeFn: EncodeFn | null = null
-let loadPromise: Promise<void> | null = null
-
 /**
- * Starts loading the tokenizer in the background.
- * Call this at plugin startup - it returns immediately and loads async.
- */
-export function preloadTokenizer(): void {
-    if (loadPromise) return
-
-    loadPromise = import("gpt-tokenizer")
-        .then(({ encode }) => {
-            encodeFn = encode
-        })
-        .catch(() => {
-            // Silently fail - fallback estimation will be used
-        })
-}
-
-/**
- * Encodes text to tokens. Returns immediately with either:
- * - Accurate token array (if tokenizer loaded)
- * - Estimated token array based on char/4 heuristic (if still loading)
+ * Estimates token count for text using character-based heuristic.
+ * Returns an array of the estimated length (for API compatibility).
+ *
+ * Uses ~3.5 chars per token which is more conservative than the common /4 estimate,
+ * accounting for code, mixed content, and non-English text better.
  */
 export function encodeText(text: string): number[] {
-    if (encodeFn) {
-        return encodeFn(text)
-    }
-    // Fallback: ~4 chars per token (reasonable estimate for English text)
-    const estimatedLength = Math.ceil(text.length / 4)
+    const estimatedLength = Math.ceil(text.length / 3.5)
     return new Array(estimatedLength)
-}
-
-/**
- * Returns whether the tokenizer has finished loading.
- * Useful for logging/debugging.
- */
-export function isTokenizerReady(): boolean {
-    return encodeFn !== null
 }
